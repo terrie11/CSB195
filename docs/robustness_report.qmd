@@ -1,0 +1,381 @@
+---
+title: "Report 1 - Robustness of the Standard Genetic Code"
+subtitle: "Comparison to Fully Randomized Codes"
+author: "Terrie Shin (1011879503, terrie.shin@mail.utoronto.ca)"
+date: "October 2025"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    embed-resources: true
+editor: visual
+---
+
+## Brief Summary
+
+For this report, I explored the robustness of the Standard Genetic Code against point mutations by comparing it to a simulation of random codes.
+
+## Methods
+
+1)  I constructed the code needed to calculate the "Benchmark Standard Genetic Code Quality score" of 9856.116. I asked Google Gemini AI to write me an R script that uses the aaSim function to calculate the sum of all 576 amino acid similarities (64 codons x 9 neighbours). My code calls it the "Total Vulnerability Score", which I will be referring to as the robustness score.
+
+2)  After ensuring that the code for calculating the robustness score is running and functional, I asked Google Gemini to create a computational simulation experiment based on my current code. It created a function that compares the Standard Genetic Code to a number of randomly generated codes. I was able to choose the simulation amount (1000, 10000, 100000, etc.).
+
+3)  Running the code gave a summary of results (I ran the experiment for 10,000 simulations), and a histogram that visually represents the collected data.
+
+## Assumptions
+
+The assumptions made in this experiment are as follows:
+
+-   Point mutations are the primary source of error (which is why the robustness of the genetic code is being measured based on this property).
+
+-   All 576 mutations are equally probable.
+
+-   The analysis made by the aaSim function is the most relevant to the genetic code for this experiment.
+
+## Setup
+
+Running all the function definitions in the background.
+
+```{r}
+#| label: setup-code
+#| echo: false
+#| include: false
+#| message: false
+#| warning: false
+
+# ==============================================================================
+# 1. Amino Acid Similarity Function (aaSim) and Constructor
+# ==============================================================================
+
+aaSimConstructor <- function() {
+  
+  # Note: The 'dat' folder must exist in the working directory for the download.
+  SPACEFILE <- "dat/aaFeatureSpace.4.1.Rds"
+  if (! file.exists(SPACEFILE)) {
+    if (! dir.exists("dat")) {
+      dir.create("dat")
+    }
+    GHurl <- paste0("https://raw.githubusercontent.com/hyginn/CSB195/main/",
+                    SPACEFILE)
+    cat(sprintf("Downloading feature space file from: %s\n", GHurl))
+    download.file(url = GHurl, destfile = SPACEFILE, mode = "wb")
+  }
+  
+  AASPACE <- readRDS(SPACEFILE)
+  
+  # Stop codon distance:
+  STOPDIST <- 1.5
+  
+  # Compute a 21 x 21 matrix of Euclidian distances between any pair of vectors
+  AADMAT <- matrix(numeric(21 * 21), nrow = 21)
+  
+  # Fill the first 20 x 20 values with amino acid pair distances
+  for (i in 1:20) {
+    for (j in 1:20) {
+      AADMAT[i, j] <- sqrt(sum((AASPACE[i, ] - AASPACE[j, ])^2))
+    }
+  }
+  
+  # Define distance to stop codons
+  stopDist <- STOPDIST * max(AADMAT)
+  AADMAT[ 21, ] <- stopDist
+  AADMAT[ , 21] <- stopDist
+  AADMAT[21,21] <- 0
+  
+  rownames(AADMAT) <- c(rownames(AASPACE), "*")
+  colnames(AADMAT) <- c(rownames(AASPACE), "*")
+  
+  myFun <- function(a1, a2) {
+    return(AADMAT[a1, a2])
+  }
+  
+  attr(myFun, "AADMAT") <- AADMAT
+  attr(myFun, "alphabet") <- rownames(AADMAT)
+  
+  return(myFun)
+}
+
+aaSim <- aaSimConstructor()
+rm(aaSimConstructor)
+
+# ==============================================================================
+# 2. Standard Genetic Code Definition and Bases
+# ==============================================================================
+
+genetic_code <- c(
+  "UUU"="F", "UUC"="F", "UUA"="L", "UUG"="L", 
+  "UCU"="S", "UCC"="S", "UCA"="S", "UCG"="S", 
+  "UAU"="Y", "UAC"="Y", "UAA"="*", "UAG"="*", 
+  "UGU"="C", "UGC"="C", "UGA"="*", "UGG"="W", 
+  "CUU"="L", "CUC"="L", "CUA"="L", "CUG"="L", 
+  "CCU"="P", "CCC"="P", "CCA"="P", "CCG"="P", 
+  "CAU"="H", "CAC"="H", "CAA"="Q", "CAG"="Q", 
+  "CGU"="R", "CGC"="R", "CGA"="R", "CGG"="R", 
+  "AUU"="I", "AUC"="I", "AUA"="I", "AUG"="M", 
+  "ACU"="T", "ACC"="T", "ACA"="T", "ACG"="T", 
+  "AAU"="N", "AAC"="N", "AAA"="K", "AAG"="K", 
+  "AGU"="S", "AGC"="S", "AGA"="R", "AGG"="R", 
+  "GUU"="V", "GUC"="V", "GUA"="V", "GUG"="V", 
+  "GCU"="A", "GCC"="A", "GCA"="A", "GCG"="A", 
+  "GAU"="D", "GAC"="D", "GAA"="E", "GAG"="E", 
+  "GGU"="G", "GGC"="G", "GGA"="G", "GGG"="G"
+)
+
+bases <- c("A", "U", "C", "G")
+
+# ==============================================================================
+# 3. Robustness Calculation Function (Mean Vulnerability Score)
+# ==============================================================================
+
+calculate_robustness <- function(code) {
+  
+  all_codons <- names(code)
+  total_robustness_score <- 0
+  synonymous_count <- 0
+  missense_count <- 0
+  stop_related_count <- 0
+  
+  for (original_codon in all_codons) {
+    aa_orig <- code[original_codon]
+    orig_bases <- unlist(strsplit(original_codon, split = ""))
+    
+    for (pos in 1:3) {
+      original_base <- orig_bases[pos]
+      mutating_bases <- bases[bases != original_base]
+      
+      for (mut_base in mutating_bases) {
+        mut_bases <- orig_bases
+        mut_bases[pos] <- mut_base
+        mutated_codon <- paste(mut_bases, collapse = "")
+        
+        aa_mut <- code[mutated_codon]
+        sim_score <- aaSim(aa_orig, aa_mut)
+        
+        total_robustness_score <- total_robustness_score + sim_score
+        
+        if (aa_orig == "*" || aa_mut == "*") {
+          stop_related_count <- stop_related_count + 1
+        } else if (aa_orig == aa_mut) {
+          synonymous_count <- synonymous_count + 1
+        } else {
+          missense_count <- missense_count + 1
+        }
+      }
+    }
+  }
+  
+  total_mutations <- 576
+  mean_vulnerability_score <- total_robustness_score / total_mutations
+  
+  return(list(
+    score = mean_vulnerability_score, 
+    total_score = total_robustness_score, 
+    counts = list(
+      total = total_mutations,
+      synonymous = synonymous_count,
+      missense = missense_count,
+      stop_related = stop_related_count
+    )
+  ))
+}
+
+# ==============================================================================
+# 4. Random Code Generation (Full Random Assignment)
+# ==============================================================================
+
+generate_random_code <- function(standard_code) {
+  
+  AMINO_ACIDS_AND_STOP <- c(
+    "A", "R", "N", "D", "C", "Q", "E", "G", "H", "I", 
+    "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V", 
+    "*"
+  )
+  
+  codon_names <- names(standard_code)
+  N_codons <- length(codon_names)
+  N_assignments <- length(AMINO_ACIDS_AND_STOP)
+  
+  # 1. Enforce Minimum Constraints (21 unique assignments)
+  required_assignments <- AMINO_ACIDS_AND_STOP
+  
+  # 2. Randomly Assign Remaining Codons (64 - 21 = 43)
+  remaining_assignments <- sample(
+    x = AMINO_ACIDS_AND_STOP, 
+    size = (N_codons - N_assignments), 
+    replace = TRUE
+  )
+  
+  all_assignments <- c(required_assignments, remaining_assignments)
+  
+  # 3. Final Shuffle
+  shuffled_assignments <- sample(all_assignments)
+  random_code <- setNames(shuffled_assignments, codon_names)
+  
+  return(random_code)
+}
+
+# ==============================================================================
+# 5. Simulation and Comparison (MODIFIED FOR TOTAL VULNERABILITY PLOT)
+# ------------------------------------------------------------------------------
+# Plots Total Vulnerability Score vs. Frequency.
+# ==============================================================================
+run_simulation_and_plot <- function(standard_code, num_simulations = 1000) {
+
+  # 1. Calculate the Standard Code Scores
+  cat("1. Calculating Standard Code Vulnerability...\n")
+  standard_result <- calculate_robustness(standard_code)
+
+  # --- NEW: Use Total Scores for Plotting ---
+  standard_total_score <- standard_result$total_score # (~9856.12)
+  standard_mean_score <- standard_result$score # Still calculated for report printing
+
+  # Print the mutation breakdown (unchanged)
+  cat("    --- Standard Code Mutation Breakdown (Total = 576) ---\n")
+  cat(sprintf("    Synonymous Mutations (aa -> same aa): %d\n", standard_result$counts$synonymous))
+  cat(sprintf("    Missense Mutations (aa -> different aa): %d\n", standard_result$counts$missense))
+  cat(sprintf("    Stop-Related Mutations (* involved): %d\n", standard_result$counts$stop_related))
+  cat("    --------------------------------------------------------\n")
+
+  # 2. Prepare and Run Simulation Loop
+  # --- NEW: Stores Total Scores ---
+  random_total_scores <- numeric(num_simulations)
+  cat(sprintf("2. Starting Simulation for %d random codes (Full Random Degeneracy)...\n", num_simulations))
+
+  for (i in 1:num_simulations) {
+    if (i %% 100 == 0) {
+      cat(sprintf("    - Running simulation %d...\n", i))
+    }
+
+    random_code <- generate_random_code(standard_code)
+    # Store the TOTAL score (un-normalized)
+    random_total_scores[i] <- calculate_robustness(random_code)$total_score
+  }
+
+  # 3. Analysis and Plotting
+
+  # Rank: Must still use the consistent MEAN score for the percentile calculation
+  # but we use the new TOTAL scores for the ranking itself since they are equivalent.
+  rank <- sum(random_total_scores > standard_total_score)
+  percentile <- (rank / num_simulations) * 100
+
+  cat("\n================================================================\n")
+  cat(sprintf("Standard Code TOTAL Vulnerability Score: %f (Sum of 576 distances)\n", standard_total_score))
+  cat(sprintf("Standard Code MEAN Vulnerability Score: %f (Lower is better)\n", standard_mean_score))
+  cat(sprintf("Mean Random Code Total Vulnerability Score: %f\n", mean(random_total_scores)))
+  cat(sprintf("Standard Code Rank (out of %d random codes): %d / %d\n",
+              num_simulations, rank, num_simulations))
+  cat(sprintf("Standard Code is more robust than %.2f%% of random codes.\n",
+              percentile))
+  cat("================================================================\n")
+
+  # --- NEW: Plot the Total Scores ---
+  hist(random_total_scores,
+       main = "Genetic Code Robustness: Total Vulnerability Score Distribution",
+       xlab = "Total Vulnerability Score (Sum of 576 aaSim Distances)",
+       col = "lightblue",
+       border = "white")
+
+  # Add a vertical line for the Standard Code's Total score
+  abline(v = standard_total_score, col = "red", lwd = 3, lty = 2)
+
+  # Add a legend
+  legend("topleft", # <-- CHANGE POSITION HERE
+         legend = c("Random Codes", "Standard Code"),
+         fill = c("lightblue", NA),
+         border = c("white", NA),
+         lty = c(NA, 2),
+         col = c(NA, "red"),
+         lwd = c(NA, 3))
+
+  # RETURN KEY RESULTS FOR QUARTO INLINE USE
+  return(list(
+    standard_result = standard_result,
+    random_scores = random_total_scores, # Now returns the total scores
+    percentile = percentile
+  ))
+}
+
+```
+
+## Simulation and Comparison
+
+The following code executes the simulation, comparing the Total Vulnerability Score (lower is more robust) of the Standard Genetic Code against 10,000 randomly generated codes. Random codes were constrained to map to all 20 amino acids and at least one stop codon, without preserving the standard code's degeneracy.
+
+```{r}
+#| label: run-experiment
+#| echo: true
+#| output: true
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+
+NUM_SIMULATIONS <- 10000 
+
+# Capture the results list from the function call
+# The function prints the summary and plots the histogram
+captured_results <- run_simulation_and_plot(genetic_code, NUM_SIMULATIONS)
+
+```
+
+## Interpretation of the Results
+
+I conducted the experiment for 10,000 simulations, and my results are as follows (which are different from the simulation above):
+
+-   Standard Code TOTAL Vulnerability Score: 9856.116292 (Sum of 576 distances)
+
+-   Standard Code MEAN Vulnerability Score: 17.111313 (Lower is better)
+
+-   Mean Random Code Total Vulnerability Score: 13734.177187
+
+-   Standard Code Rank (out of 10000 random codes): 10000 / 10000
+
+-   Standard Code is more robust than 100.00% of random codes.
+
+The results clearly demonstrate that the Standard Genetic Code is **significantly optimized** for robustness against single-base substitutions, and it may be very close to the global optimum.
+
+After 10,000 simulations, the Standard Genetic Code was more robust than 100% of the randomly generated codes. Its Total Vulnerability Score in this experiment which is the "Benchmark Standard Genetic Code Quality score" of 9856.116 turned out to be the lowest score out of all the other random codes.
+
+This suggests that the tolerance on point mutations, as measured by the `aaSim` function, played a dominant role in shaping the Standard Genetic Code's structure. It can be concluded that the code may be very close to the global optimum.
+
+## Limitations
+
+Although this experiment demonstrates that the Standard Genetic Code may be close to the global optimum, there are limitations that impact the validity of the results.
+
+The limitations in this experiment are as follows:
+
+-   Only point mutations (single-base substitutions) are considered when determining the robustness of the genetic code. Other mutations (indels, frameshifts) could be more damaging to the genetic code, but they are not considered.
+
+-   The amount of amino acid features that are considered by the aaSim function is limited.
+
+-   The random code is only limited by the requirement of having 20 amino acids and at least one stop codon. Other constraints could be used.
+
+Further investigation on the robustness of the Standard Genetic Code is needed to confirm its closeness to the global optimum.
+
+## Appendix
+
+Initially, I began to develop the R script for this experiment with ChatGPT, but too many errors occurred when running the script, resulting in me changing my AI assistant.
+
+I used Google Gemini as my AI assistant for the entire report. On multiple occasions I had to clarify or adjust my prompts, but none prevented me from completing the experiment.
+
+Gemini AI areas of strength:
+
+-   Making summary of steps: Gemini was able to quickly summarize which steps needed to be taken to make the experiment possible.
+
+-   Making summary of clarifications: Gemini made a clear list of clarifications it needed before continuing with the code.
+
+-   Suggesting next steps: After the code for finding the robustness score was successful, Gemini asked if I wanted explore further with different methods of analysis.
+
+Gemini AI areas of weakness:
+
+-   Communication of possible errors: Gemini does not inform the user about possible errors, only provides solutions to errors once they occur. Time consuming for the user who was unaware that the errors could occur.
+
+-   Suggests debugging rather than give the solution: Sometimes, the debugging method Gemini suggested was unnecessary and unclear. Tweaking the code myself seemed quicker and easier than following the steps to debug the code.
+
+## Self-assessment
+
+Grade: 80/100
+
+Justification: I believe my report demonstrates the code, output, and analysis/interpretation required to analyze the quality of the Standard Genetic Code based on its robustness against point mutations.
